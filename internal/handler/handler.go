@@ -1,24 +1,23 @@
-// Package handler — HTTP-слой: роутинг, хендлеры, middleware.
-// Хендлер только разбирает запрос (DTO), вызывает сервис и формирует ответ.
-// Бизнес-логики здесь быть не должно.
+// Package handler — HTTP-слой: маршруты, хендлеры, middleware.
+// Хендлер разбирает запрос, вызывает сервис и пишет ответ. Бизнес-логики здесь нет.
 package handler
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net/http"
-	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
+	"github.com/Temirlan2199/file-upload/internal/dto"
 	"github.com/Temirlan2199/file-upload/internal/model"
 )
 
-// AuthService — то, что хендлерам нужно от сервиса авторизации.
+// AuthService — методы сервиса, которые нужны хендлерам.
 type AuthService interface {
 	Register(ctx context.Context, email, password string) (*model.User, error)
-	Login(ctx context.Context, email, password string) (token string, expiresAt time.Time, err error)
+	Login(ctx context.Context, email, password string) (string, error)
 	ParseToken(token string) (uuid.UUID, error)
 	GetUser(ctx context.Context, id uuid.UUID) (*model.User, error)
 }
@@ -32,30 +31,40 @@ func New(log *slog.Logger, auth AuthService) *Handler {
 	return &Handler{log: log, auth: auth}
 }
 
-// Router собирает gin.Engine со всеми маршрутами и middleware.
-func (h *Handler) Router() *gin.Engine {
-	registerValidatorJSONNames()
+// Routes регистрирует все маршруты.
+// С Go 1.22 в шаблоне можно указать метод: "POST /path".
+func (h *Handler) Routes() http.Handler {
+	mux := http.NewServeMux()
 
-	// gin.New() вместо gin.Default(): middleware подключаем явно,
-	// чтобы логи шли через наш slog, а не через встроенный логгер gin.
-	r := gin.New()
-	r.Use(gin.Recovery(), requestLogger(h.log))
+	mux.HandleFunc("GET /health", h.health)
+	mux.HandleFunc("POST /api/v1/auth/register", h.register)
+	mux.HandleFunc("POST /api/v1/auth/login", h.login)
 
-	r.GET("/health", health)
+	// requireAuth пропустит запрос дальше, только если токен валиден.
+	mux.HandleFunc("GET /api/v1/users/me", h.requireAuth(h.me))
 
-	api := r.Group("/api/v1")
-
-	auth := api.Group("/auth")
-	auth.POST("/register", h.register)
-	auth.POST("/login", h.login)
-
-	// Всё, что в этой группе, требует валидный JWT.
-	protected := api.Group("", h.authMiddleware())
-	protected.GET("/users/me", h.me)
-
-	return r
+	// logRequests оборачивает весь mux — логируется каждый запрос.
+	return h.logRequests(mux)
 }
 
-func health(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+func (h *Handler) health(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// writeJSON пишет ответ в формате JSON с нужным статусом.
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(v)
+}
+
+func writeError(w http.ResponseWriter, status int, msg string) {
+	writeJSON(w, status, dto.ErrorResponse{Error: msg})
+}
+
+// internalError — для неожиданных ошибок: подробности пишем в лог,
+// а клиенту отдаём общий текст, чтобы не раскрывать внутренности.
+func (h *Handler) internalError(w http.ResponseWriter, err error) {
+	h.log.Error("internal error", "error", err)
+	writeError(w, http.StatusInternalServerError, "internal server error")
 }

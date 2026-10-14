@@ -1,58 +1,65 @@
 package handler
 
 import (
+	"encoding/json"
+	"errors"
 	"net/http"
-	"time"
-
-	"github.com/gin-gonic/gin"
 
 	"github.com/Temirlan2199/file-upload/internal/dto"
+	"github.com/Temirlan2199/file-upload/internal/service"
 )
 
-func (h *Handler) register(c *gin.Context) {
+func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
 	var req dto.RegisterRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		h.respondBindError(c, err)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	if err := req.Validate(); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	// c.Request.Context() отменится, если клиент оборвёт соединение —
-	// тогда и запрос в базу прервётся, не тратя ресурсы впустую.
-	user, err := h.auth.Register(c.Request.Context(), req.Email, req.Password)
+	// r.Context() отменится, если клиент оборвёт соединение.
+	user, err := h.auth.Register(r.Context(), req.Email, req.Password)
+	if errors.Is(err, service.ErrEmailTaken) {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
 	if err != nil {
-		h.respondError(c, err)
+		h.internalError(w, err)
 		return
 	}
 
-	c.JSON(http.StatusCreated, dto.NewUserResponse(user))
+	writeJSON(w, http.StatusCreated, dto.NewUserResponse(user))
 }
 
-func (h *Handler) login(c *gin.Context) {
+func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 	var req dto.LoginRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		h.respondBindError(c, err)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
 
-	token, expiresAt, err := h.auth.Login(c.Request.Context(), req.Email, req.Password)
+	token, err := h.auth.Login(r.Context(), req.Email, req.Password)
+	if errors.Is(err, service.ErrInvalidCredentials) {
+		writeError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
 	if err != nil {
-		h.respondError(c, err)
+		h.internalError(w, err)
 		return
 	}
 
-	c.JSON(http.StatusOK, dto.TokenResponse{
-		AccessToken: token,
-		TokenType:   "Bearer",
-		ExpiresIn:   int64(time.Until(expiresAt).Seconds()),
-	})
+	writeJSON(w, http.StatusOK, dto.TokenResponse{Token: token})
 }
 
-func (h *Handler) me(c *gin.Context) {
-	user, err := h.auth.GetUser(c.Request.Context(), userIDFromContext(c))
+func (h *Handler) me(w http.ResponseWriter, r *http.Request) {
+	user, err := h.auth.GetUser(r.Context(), userIDFromContext(r.Context()))
 	if err != nil {
-		h.respondError(c, err)
+		h.internalError(w, err)
 		return
 	}
 
-	c.JSON(http.StatusOK, dto.NewUserResponse(user))
+	writeJSON(w, http.StatusOK, dto.NewUserResponse(user))
 }

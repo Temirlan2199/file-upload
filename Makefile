@@ -2,26 +2,19 @@
 -include .env
 export
 
-GOOSE_VERSION := v3.26.0
+# goose — утилита для миграций. go run скачает и запустит нужную версию.
+GOOSE := go run github.com/pressly/goose/v3/cmd/goose@v3.26.0 -dir migrations
 
-.PHONY: run build test lint tidy infra-up infra-down infra-logs \
-	migrate-up migrate-down migrate-status migrate-create
+.PHONY: run build test infra-up infra-down migrate-up migrate-down migrate-status migrate-create
 
 run:
 	go run ./cmd/api
 
 build:
 	go build -o bin/api ./cmd/api
-	go build -o bin/migrator ./cmd/migrator
 
 test:
-	go test -race ./...
-
-lint:
-	golangci-lint run
-
-tidy:
-	go mod tidy
+	go test ./...
 
 infra-up:
 	docker compose up -d
@@ -29,19 +22,15 @@ infra-up:
 infra-down:
 	docker compose down
 
-infra-logs:
-	docker compose logs -f
-
-# --- Миграции ---
 migrate-up:
-	go run ./cmd/migrator up
+	$(GOOSE) postgres "$(POSTGRES_DSN)" up
 
 migrate-down:
-	go run ./cmd/migrator down
+	$(GOOSE) postgres "$(POSTGRES_DSN)" down
 
 migrate-status:
-	go run ./cmd/migrator status
+	$(GOOSE) postgres "$(POSTGRES_DSN)" status
 
 # Создать новую миграцию: make migrate-create name=create_files
 migrate-create:
-	go run github.com/pressly/goose/v3/cmd/goose@$(GOOSE_VERSION) -dir migrations create $(name) sql
+	$(GOOSE) create $(name) sql
