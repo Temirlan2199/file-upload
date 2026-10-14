@@ -17,6 +17,8 @@ import (
 	"github.com/Temirlan2199/file-upload/internal/config"
 	"github.com/Temirlan2199/file-upload/internal/handler"
 	"github.com/Temirlan2199/file-upload/internal/logger"
+	"github.com/Temirlan2199/file-upload/internal/repository"
+	"github.com/Temirlan2199/file-upload/internal/service"
 )
 
 func main() {
@@ -45,9 +47,23 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// --- Инфраструктура ---
+	pool, err := repository.NewPostgresPool(ctx, cfg.Postgres.DSN(), cfg.Postgres.MaxConns)
+	if err != nil {
+		return fmt.Errorf("connect postgres: %w", err)
+	}
+	defer pool.Close()
+	log.Info("connected to postgres")
+
+	// --- Слои: repository → service → handler ---
+	// Зависимости передаём явно через конструкторы (dependency injection вручную).
+	userRepo := repository.NewUserRepository(pool)
+	authService := service.NewAuthService(userRepo, cfg.JWT.Secret, cfg.JWT.AccessTTL)
+	h := handler.New(log, authService)
+
 	srv := &http.Server{
 		Addr:              ":" + cfg.HTTP.Port,
-		Handler:           handler.NewRouter(log),
+		Handler:           h.Router(),
 		ReadHeaderTimeout: cfg.HTTP.ReadHeaderTimeout,
 	}
 
