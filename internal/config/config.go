@@ -13,6 +13,12 @@ type Config struct {
 	PostgresDSN string        `env:"POSTGRES_DSN" env-required:"true"`
 	JWTSecret   string        `env:"JWT_SECRET" env-required:"true"`
 	JWTTTL      time.Duration `env:"JWT_TTL" env-default:"15m"`
+
+	MinioEndpoint  string `env:"MINIO_ENDPOINT" env-default:"localhost:9000"`
+	MinioAccessKey string `env:"MINIO_ACCESS_KEY" env-required:"true"`
+	MinioSecretKey string `env:"MINIO_SECRET_KEY" env-required:"true"`
+	MinioBucket    string `env:"MINIO_BUCKET" env-default:"files"`
+	MinioUseSSL    bool   `env:"MINIO_USE_SSL" env-default:"false"`
 }
 
 // Load читает переменные окружения в Config.
