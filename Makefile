@@ -2,10 +2,11 @@
 -include .env
 export
 
-# goose — утилита для миграций. go run скачает и запустит нужную версию.
-GOOSE := go run github.com/pressly/goose/v3/cmd/goose@v3.26.0 -dir migrations
+# golang-migrate — утилита для миграций. go run скачает и запустит нужную версию.
+# -tags 'postgres' включает поддержку Postgres (без него утилита не знает про эту базу).
+MIGRATE := go run -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@v4.20.1
 
-.PHONY: run build test infra-up infra-down migrate-up migrate-down migrate-status migrate-create
+.PHONY: run build test infra-up infra-down migrate-up migrate-down migrate-version migrate-create
 
 run:
 	go run ./cmd/api
@@ -22,15 +23,19 @@ infra-up:
 infra-down:
 	docker compose down
 
+# Применить все новые миграции (*.up.sql)
 migrate-up:
-	$(GOOSE) postgres "$(POSTGRES_DSN)" up
+	$(MIGRATE) -path migrations -database "$(POSTGRES_DSN)" up
 
+# Откатить одну последнюю миграцию (*.down.sql)
 migrate-down:
-	$(GOOSE) postgres "$(POSTGRES_DSN)" down
+	$(MIGRATE) -path migrations -database "$(POSTGRES_DSN)" down 1
 
-migrate-status:
-	$(GOOSE) postgres "$(POSTGRES_DSN)" status
+# Показать текущую версию базы
+migrate-version:
+	$(MIGRATE) -path migrations -database "$(POSTGRES_DSN)" version
 
 # Создать новую миграцию: make migrate-create name=create_files
+# -seq — номера по порядку (000002, 000003...) вместо даты и времени.
 migrate-create:
-	$(GOOSE) create $(name) sql
+	$(MIGRATE) create -ext sql -dir migrations -seq $(name)
