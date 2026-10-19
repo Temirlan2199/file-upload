@@ -1,0 +1,56 @@
+# HTTP-запросы для ручной проверки API.
+# Открой файл в GoLand и нажми зелёную ▶ слева от запроса.
+# Запросы разделяются строкой, начинающейся с ###.
+# Перед запуском: make infra-up && make migrate-up && make run
+
+### Health — сервер жив
+GET http://localhost:8000/health
+
+### Регистрация
+POST http://localhost:8000/api/v1/auth/register
+Content-Type: application/json
+
+{
+  "email": "me@mail.com",
+  "password": "supersecret"
+}
+
+### Регистрация с невалидными данными → 400
+POST http://localhost:8000/api/v1/auth/register
+Content-Type: application/json
+
+{
+  "email": "not-an-email",
+  "password": "123"
+}
+
+### Логин — токен из ответа сохраняется в переменную token
+POST http://localhost:8000/api/v1/auth/login
+Content-Type: application/json
+
+{
+  "email": "me@mail.com",
+  "password": "supersecret"
+}
+
+> {%
+    // Этот JS-скрипт выполняется после ответа:
+    // берём поле token из JSON и сохраняем в глобальную переменную.
+    client.global.set("token", response.body.token);
+%}
+
+### Логин с неверным паролем → 401
+POST http://localhost:8000/api/v1/auth/login
+Content-Type: application/json
+
+{
+  "email": "me@mail.com",
+  "password": "wrong-password"
+}
+
+### Текущий пользователь (сначала выполни «Логин»)
+GET http://localhost:8000/api/v1/users/me
+Authorization: Bearer {{token}}
+
+### Текущий пользователь без токена → 401
+GET http://localhost:8000/api/v1/users/me

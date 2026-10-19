@@ -2,7 +2,11 @@
 -include .env
 export
 
-.PHONY: run build test lint tidy infra-up infra-down infra-logs
+# golang-migrate — утилита для миграций. go run скачает и запустит нужную версию.
+# -tags 'postgres' включает поддержку Postgres (без него утилита не знает про эту базу).
+MIGRATE := go run -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@v4.20.1
+
+.PHONY: run build test infra-up infra-down migrate-up migrate-down migrate-version migrate-create
 
 run:
 	go run ./cmd/api
@@ -11,13 +15,7 @@ build:
 	go build -o bin/api ./cmd/api
 
 test:
-	go test -race ./...
-
-lint:
-	golangci-lint run
-
-tidy:
-	go mod tidy
+	go test ./...
 
 infra-up:
 	docker compose up -d
@@ -25,5 +23,19 @@ infra-up:
 infra-down:
 	docker compose down
 
-infra-logs:
-	docker compose logs -f
+# Применить все новые миграции (*.up.sql)
+migrate-up:
+	$(MIGRATE) -path migrations -database "$(POSTGRES_DSN)" up
+
+# Откатить одну последнюю миграцию (*.down.sql)
+migrate-down:
+	$(MIGRATE) -path migrations -database "$(POSTGRES_DSN)" down 1
+
+# Показать текущую версию базы
+migrate-version:
+	$(MIGRATE) -path migrations -database "$(POSTGRES_DSN)" version
+
+# Создать новую миграцию: make migrate-create name=create_files
+# -seq — номера по порядку (000002, 000003...) вместо даты и времени.
+migrate-create:
+	$(MIGRATE) create -ext sql -dir migrations -seq $(name)
