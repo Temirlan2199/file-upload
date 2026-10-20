@@ -16,6 +16,7 @@ import (
 	"github.com/Temirlan2199/file-upload/internal/logger"
 	"github.com/Temirlan2199/file-upload/internal/repository"
 	"github.com/Temirlan2199/file-upload/internal/service"
+	"github.com/Temirlan2199/file-upload/internal/storage"
 )
 
 func main() {
@@ -38,10 +39,21 @@ func main() {
 	}
 	defer db.Close()
 
-	// Собираем слои снизу вверх: repository → service → handler.
+	fileStorage, err := storage.NewMinioStorage(ctx,
+		cfg.MinioEndpoint, cfg.MinioAccessKey, cfg.MinioSecretKey, cfg.MinioBucket, cfg.MinioUseSSL)
+	if err != nil {
+		log.Error("connect to minio", "error", err)
+		os.Exit(1)
+	}
+
+	// Собираем слои снизу вверх: repository/storage → service → handler.
 	userRepo := repository.NewUserRepository(db)
+	fileRepo := repository.NewFileRepository(db)
+
 	authService := service.NewAuthService(userRepo, cfg.JWTSecret, cfg.JWTTTL)
-	h := handler.New(log, authService)
+	fileService := service.NewFileService(fileRepo, fileStorage)
+
+	h := handler.New(log, authService, fileService)
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.HTTPPort,

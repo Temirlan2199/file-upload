@@ -5,6 +5,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 
@@ -22,13 +23,23 @@ type AuthService interface {
 	GetUser(ctx context.Context, id uuid.UUID) (*model.User, error)
 }
 
-type Handler struct {
-	log  *slog.Logger
-	auth AuthService
+// FileService — методы сервиса файлов, которые нужны хендлерам.
+type FileService interface {
+	Upload(ctx context.Context, ownerID uuid.UUID, name, contentType string, size int64, r io.Reader) (*model.File, error)
+	Get(ctx context.Context, ownerID, id uuid.UUID) (*model.File, error)
+	List(ctx context.Context, ownerID uuid.UUID, limit, offset int) ([]model.File, error)
+	Download(ctx context.Context, ownerID, id uuid.UUID) (*model.File, io.ReadCloser, error)
+	Delete(ctx context.Context, ownerID, id uuid.UUID) error
 }
 
-func New(log *slog.Logger, auth AuthService) *Handler {
-	return &Handler{log: log, auth: auth}
+type Handler struct {
+	log   *slog.Logger
+	auth  AuthService
+	files FileService
+}
+
+func New(log *slog.Logger, auth AuthService, files FileService) *Handler {
+	return &Handler{log: log, auth: auth, files: files}
 }
 
 // Routes регистрирует все маршруты.
@@ -42,6 +53,13 @@ func (h *Handler) Routes() http.Handler {
 
 	// requireAuth пропустит запрос дальше, только если токен валиден.
 	mux.HandleFunc("GET /api/v1/users/me", h.requireAuth(h.me))
+
+	// Файлы. {id} — параметр пути, достаётся через r.PathValue("id").
+	mux.HandleFunc("POST /api/v1/files", h.requireAuth(h.uploadFile))
+	mux.HandleFunc("GET /api/v1/files", h.requireAuth(h.listFiles))
+	mux.HandleFunc("GET /api/v1/files/{id}", h.requireAuth(h.getFile))
+	mux.HandleFunc("GET /api/v1/files/{id}/download", h.requireAuth(h.downloadFile))
+	mux.HandleFunc("DELETE /api/v1/files/{id}", h.requireAuth(h.deleteFile))
 
 	// logRequests оборачивает весь mux — логируется каждый запрос.
 	return h.logRequests(mux)

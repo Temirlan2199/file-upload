@@ -29,7 +29,20 @@ curl -X POST localhost:8000/api/v1/auth/login \
 
 # текущий пользователь
 curl localhost:8000/api/v1/users/me -H "Authorization: Bearer <token>"
+
+# загрузить файл
+curl -X POST localhost:8000/api/v1/files -H "Authorization: Bearer <token>" -F "file=@./README.md"
+
+# список файлов
+curl "localhost:8000/api/v1/files?limit=20&offset=0" -H "Authorization: Bearer <token>"
+
+# метаданные / скачать / удалить
+curl localhost:8000/api/v1/files/<id> -H "Authorization: Bearer <token>"
+curl -OJ localhost:8000/api/v1/files/<id>/download -H "Authorization: Bearer <token>"
+curl -X DELETE localhost:8000/api/v1/files/<id> -H "Authorization: Bearer <token>"
 ```
+
+Все запросы также есть в `api.http` — его можно запускать прямо из GoLand.
 
 ## Локальные UI
 

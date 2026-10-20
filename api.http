@@ -54,3 +54,39 @@ Authorization: Bearer {{token}}
 
 ### Текущий пользователь без токена → 401
 GET http://localhost:8000/api/v1/users/me
+
+# ======================= Файлы =======================
+# Все запросы ниже требуют токен — сначала выполни «Логин».
+
+### Загрузка файла (multipart/form-data, поле "file")
+POST http://localhost:8000/api/v1/files
+Authorization: Bearer {{token}}
+Content-Type: multipart/form-data; boundary=boundary
+
+--boundary
+Content-Disposition: form-data; name="file"; filename="README.md"
+Content-Type: text/markdown
+
+< ./README.md
+--boundary--
+
+> {%
+    // Сохраняем id загруженного файла для следующих запросов.
+    client.global.set("file_id", response.body.id);
+%}
+
+### Список моих файлов (постранично)
+GET http://localhost:8000/api/v1/files?limit=20&offset=0
+Authorization: Bearer {{token}}
+
+### Метаданные файла
+GET http://localhost:8000/api/v1/files/{{file_id}}
+Authorization: Bearer {{token}}
+
+### Скачать файл
+GET http://localhost:8000/api/v1/files/{{file_id}}/download
+Authorization: Bearer {{token}}
+
+### Удалить файл → 204
+DELETE http://localhost:8000/api/v1/files/{{file_id}}
+Authorization: Bearer {{token}}
