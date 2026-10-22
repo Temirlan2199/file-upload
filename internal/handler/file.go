@@ -31,6 +31,11 @@ func (h *Handler) uploadFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer file.Close()
+	// Файлы больше 32 МБ FormFile сохраняет во временный файл на диске.
+	// net/http удаляет такие файлы сам, но только у исходного запроса,
+	// а у нас копия: requireAuth вызывает r.WithContext(...).
+	// Поэтому удаляем временные файлы сами, иначе они останутся на диске навсегда.
+	defer r.MultipartForm.RemoveAll()
 
 	// Тип файла сообщает клиент. Если не сообщил — «просто байты».
 	contentType := header.Header.Get("Content-Type")
