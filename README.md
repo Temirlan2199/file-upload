@@ -40,7 +40,13 @@ curl "localhost:8000/api/v1/files?limit=20&offset=0" -H "Authorization: Bearer <
 curl localhost:8000/api/v1/files/<id> -H "Authorization: Bearer <token>"
 curl -OJ localhost:8000/api/v1/files/<id>/download -H "Authorization: Bearer <token>"
 curl -X DELETE localhost:8000/api/v1/files/<id> -H "Authorization: Bearer <token>"
+
+# публичная ссылка на файл (работает ttl_minutes минут, открывается без токена)
+curl -X POST localhost:8000/api/v1/files/<id>/share -H "Authorization: Bearer <token>" -d '{"ttl_minutes":60}'
+curl -OJ localhost:8000/s/<token>
 ```
+
+Логин и регистрация ограничены: 10 запросов в минуту с одного IP (иначе `429`).
 
 Все запросы также есть в `api.http` — его можно запускать прямо из GoLand.
 
