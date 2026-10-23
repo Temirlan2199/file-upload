@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Temirlan2199/file-upload/internal/broker"
 	"github.com/Temirlan2199/file-upload/internal/cache"
 	"github.com/Temirlan2199/file-upload/internal/config"
 	"github.com/Temirlan2199/file-upload/internal/handler"
@@ -54,6 +55,15 @@ func main() {
 	}
 	defer rdb.Close()
 
+	// Kafka: топики создаём заранее, до первой отправки события.
+	if err := broker.CreateTopics(cfg.KafkaAddr); err != nil {
+		log.Error("create kafka topics", "error", err)
+		os.Exit(1)
+	}
+	// Producer отправляет события в Kafka; Close допишет буфер при остановке.
+	producer := broker.NewProducer(cfg.KafkaAddr)
+	defer producer.Close()
+
 	// Собираем слои снизу вверх: repository/storage/cache → service → handler.
 	userRepo := repository.NewUserRepository(db)
 	fileRepo := repository.NewFileRepository(db)
@@ -62,7 +72,7 @@ func main() {
 	limiter := cache.NewRateLimiter(rdb, 10, time.Minute) // не больше 10 запросов в минуту
 
 	authService := service.NewAuthService(userRepo, cfg.JWTSecret, cfg.JWTTTL)
-	fileService := service.NewFileService(fileRepo, fileStorage, fileCache)
+	fileService := service.NewFileService(fileRepo, fileStorage, fileCache, producer, log)
 
 	h := handler.New(log, authService, fileService, limiter)
 

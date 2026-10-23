@@ -21,6 +21,9 @@ type Config struct {
 	MinioUseSSL    bool   `env:"MINIO_USE_SSL" env-default:"false"`
 
 	RedisAddr string `env:"REDIS_ADDR" env-default:"localhost:6379"`
+
+	// Адрес Kafka. С хоста (make run / make worker) — внешний порт 9094.
+	KafkaAddr string `env:"KAFKA_ADDR" env-default:"localhost:9094"`
 }
 
 // Load читает переменные окружения в Config.

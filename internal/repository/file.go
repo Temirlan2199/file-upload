@@ -19,15 +19,15 @@ func NewFileRepository(db *pgxpool.Pool) *FileRepository {
 	return &FileRepository{db: db}
 }
 
-// Create сохраняет метаданные файла. ID заполняет сервис, created_at — база.
+// Create сохраняет метаданные файла. ID и статус заполняет сервис, created_at — база.
 func (r *FileRepository) Create(ctx context.Context, f *model.File) error {
 	query := `
-		INSERT INTO files (id, owner_id, name, size, content_type)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO files (id, owner_id, name, size, content_type, status)
+		VALUES ($1, $2, $3, $4, $5, $6)
 		RETURNING created_at`
 
 	// Scan записывает created_at из базы прямо в переданную структуру.
-	return r.db.QueryRow(ctx, query, f.ID, f.OwnerID, f.Name, f.Size, f.ContentType).
+	return r.db.QueryRow(ctx, query, f.ID, f.OwnerID, f.Name, f.Size, f.ContentType, f.Status).
 		Scan(&f.CreatedAt)
 }
 
@@ -35,13 +35,13 @@ func (r *FileRepository) Create(ctx context.Context, f *model.File) error {
 // это делает сервис (для публичных ссылок проверка не нужна).
 func (r *FileRepository) GetByID(ctx context.Context, id uuid.UUID) (*model.File, error) {
 	query := `
-		SELECT id, owner_id, name, size, content_type, created_at
+		SELECT id, owner_id, name, size, content_type, status, checksum, created_at
 		FROM files
 		WHERE id = $1`
 
 	var f model.File
 	err := r.db.QueryRow(ctx, query, id).
-		Scan(&f.ID, &f.OwnerID, &f.Name, &f.Size, &f.ContentType, &f.CreatedAt)
+		Scan(&f.ID, &f.OwnerID, &f.Name, &f.Size, &f.ContentType, &f.Status, &f.Checksum, &f.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -55,7 +55,7 @@ func (r *FileRepository) GetByID(ctx context.Context, id uuid.UUID) (*model.File
 // limit — сколько записей вернуть, offset — сколько пропустить с начала.
 func (r *FileRepository) ListByOwner(ctx context.Context, ownerID uuid.UUID, limit, offset int) ([]model.File, error) {
 	query := `
-		SELECT id, owner_id, name, size, content_type, created_at
+		SELECT id, owner_id, name, size, content_type, status, checksum, created_at
 		FROM files
 		WHERE owner_id = $1
 		ORDER BY created_at DESC
@@ -73,7 +73,7 @@ func (r *FileRepository) ListByOwner(ctx context.Context, ownerID uuid.UUID, lim
 	files := []model.File{}
 	for rows.Next() {
 		var f model.File
-		if err := rows.Scan(&f.ID, &f.OwnerID, &f.Name, &f.Size, &f.ContentType, &f.CreatedAt); err != nil {
+		if err := rows.Scan(&f.ID, &f.OwnerID, &f.Name, &f.Size, &f.ContentType, &f.Status, &f.Checksum, &f.CreatedAt); err != nil {
 			return nil, err
 		}
 		files = append(files, f)
@@ -92,6 +92,21 @@ func (r *FileRepository) Delete(ctx context.Context, id, ownerID uuid.UUID) erro
 		return err
 	}
 	// RowsAffected — сколько строк удалено. 0 — значит, удалять было нечего.
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// UpdateProcessing сохраняет результат обработки файла воркером.
+// Если файла уже нет (удалили, пока он ждал обработки) — ErrNotFound.
+func (r *FileRepository) UpdateProcessing(ctx context.Context, id uuid.UUID, status model.FileStatus, checksum string) error {
+	query := `UPDATE files SET status = $2, checksum = $3 WHERE id = $1`
+
+	tag, err := r.db.Exec(ctx, query, id, status, checksum)
+	if err != nil {
+		return err
+	}
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
 	}
