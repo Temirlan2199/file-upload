@@ -59,13 +59,12 @@ func main() {
 	fileRepo := repository.NewFileRepository(db)
 
 	fileCache := cache.NewFileCache(rdb, 10*time.Minute)  // метаданные живут в кэше 10 минут
-	shareStore := cache.NewShareStore(rdb)                // ссылки «поделиться»
 	limiter := cache.NewRateLimiter(rdb, 10, time.Minute) // не больше 10 запросов в минуту
 
 	authService := service.NewAuthService(userRepo, cfg.JWTSecret, cfg.JWTTTL)
-	fileService := service.NewFileService(fileRepo, fileStorage, fileCache, shareStore)
+	fileService := service.NewFileService(fileRepo, fileStorage, fileCache)
 
-	h := handler.New(log, authService, fileService, limiter, cfg.PublicURL)
+	h := handler.New(log, authService, fileService, limiter)
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.HTTPPort,

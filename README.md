@@ -41,9 +41,8 @@ curl localhost:8000/api/v1/files/<id> -H "Authorization: Bearer <token>"
 curl -OJ localhost:8000/api/v1/files/<id>/download -H "Authorization: Bearer <token>"
 curl -X DELETE localhost:8000/api/v1/files/<id> -H "Authorization: Bearer <token>"
 
-# публичная ссылка на файл (работает ttl_minutes минут, открывается без токена)
-curl -X POST localhost:8000/api/v1/files/<id>/share -H "Authorization: Bearer <token>" -d '{"ttl_minutes":60}'
-curl -OJ localhost:8000/s/<token>
+# публичная ссылка на скачивание (без токена, можно открыть в браузере)
+curl -OJ localhost:8000/s/<id>
 ```
 
 Логин и регистрация ограничены: 10 запросов в минуту с одного IP (иначе `429`).
