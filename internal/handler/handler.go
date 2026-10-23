@@ -8,7 +8,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -31,8 +30,7 @@ type FileService interface {
 	List(ctx context.Context, ownerID uuid.UUID, limit, offset int) ([]model.File, error)
 	Download(ctx context.Context, ownerID, id uuid.UUID) (*model.File, io.ReadCloser, error)
 	Delete(ctx context.Context, ownerID, id uuid.UUID) error
-	Share(ctx context.Context, ownerID, id uuid.UUID, ttl time.Duration) (string, time.Time, error)
-	DownloadShared(ctx context.Context, token string) (*model.File, io.ReadCloser, error)
+	DownloadPublic(ctx context.Context, id uuid.UUID) (*model.File, io.ReadCloser, error)
 }
 
 // RateLimiter — ограничитель частоты запросов.
@@ -41,15 +39,14 @@ type RateLimiter interface {
 }
 
 type Handler struct {
-	log       *slog.Logger
-	auth      AuthService
-	files     FileService
-	limiter   RateLimiter
-	publicURL string // внешний адрес сервиса для ссылок «поделиться»
+	log     *slog.Logger
+	auth    AuthService
+	files   FileService
+	limiter RateLimiter
 }
 
-func New(log *slog.Logger, auth AuthService, files FileService, limiter RateLimiter, publicURL string) *Handler {
-	return &Handler{log: log, auth: auth, files: files, limiter: limiter, publicURL: publicURL}
+func New(log *slog.Logger, auth AuthService, files FileService, limiter RateLimiter) *Handler {
+	return &Handler{log: log, auth: auth, files: files, limiter: limiter}
 }
 
 // Routes регистрирует все маршруты.
@@ -72,9 +69,8 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/files/{id}/download", h.requireAuth(h.downloadFile))
 	mux.HandleFunc("DELETE /api/v1/files/{id}", h.requireAuth(h.deleteFile))
 
-	// Ссылки «поделиться»: создать — с токеном, скачать — без (доступ даёт сама ссылка).
-	mux.HandleFunc("POST /api/v1/files/{id}/share", h.requireAuth(h.shareFile))
-	mux.HandleFunc("GET /s/{token}", h.downloadShared)
+	// Публичная ссылка на скачивание — без авторизации, любой файл по id.
+	mux.HandleFunc("GET /s/{id}", h.downloadPublic)
 
 	// logRequests оборачивает весь mux — логируется каждый запрос.
 	return h.logRequests(mux)

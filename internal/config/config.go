@@ -21,9 +21,6 @@ type Config struct {
 	MinioUseSSL    bool   `env:"MINIO_USE_SSL" env-default:"false"`
 
 	RedisAddr string `env:"REDIS_ADDR" env-default:"localhost:6379"`
-
-	// PublicURL — внешний адрес сервиса, из него собираются ссылки «поделиться».
-	PublicURL string `env:"PUBLIC_URL" env-default:"http://localhost:8000"`
 }
 
 // Load читает переменные окружения в Config.

@@ -173,29 +173,12 @@ Authorization: Bearer {{token}}
 %}
 
 
-# ===================== Ссылки «поделиться» (Redis) ====================
+# ======================= Публичная ссылка =======================
+# Ссылка на скачивание без авторизации: {{host}}/s/<id файла>.
+# Её можно открыть прямо в браузере — файл скачается без токена.
 
-### 10a. Создать публичную ссылку на README.md на 60 минут
-POST {{host}}/api/v1/files/{{file_id}}/share
-Authorization: Bearer {{token}}
-Content-Type: application/json
-
-{
-  "ttl_minutes": 60
-}
-
-> {%
-    client.test("ссылка создана", function () {
-        client.assert(response.status === 201, "статус: " + response.status);
-        client.assert(response.body.url.indexOf("/s/") !== -1, "url: " + response.body.url);
-    });
-    // Сохраняем полный адрес ссылки.
-    client.global.set("share_url", response.body.url);
-%}
-
-### 10b. Скачать по ссылке БЕЗ токена (так её откроет любой, кому её отправили)
-# Эту ссылку можно открыть и прямо в браузере.
-GET {{share_url}}
+### 10a. Скачать README.md по публичной ссылке БЕЗ токена
+GET {{host}}/s/{{file_id}}
 
 > {%
     client.test("файл скачан по ссылке без авторизации", function () {
@@ -204,27 +187,12 @@ GET {{share_url}}
     });
 %}
 
-### 10c. Несуществующая ссылка → 404
-GET {{host}}/s/NOSUCHTOKEN
+### 10b. Публичная ссылка на несуществующий файл → 404
+GET {{host}}/s/00000000-0000-0000-0000-000000000000
 
 > {%
-    client.test("404 на несуществующую ссылку", function () {
+    client.test("404 на несуществующий файл", function () {
         client.assert(response.status === 404, "статус: " + response.status);
-    });
-%}
-
-### 10d. Неверный срок жизни ссылки → 400
-POST {{host}}/api/v1/files/{{file_id}}/share
-Authorization: Bearer {{token}}
-Content-Type: application/json
-
-{
-  "ttl_minutes": 0
-}
-
-> {%
-    client.test("400 на ttl_minutes = 0", function () {
-        client.assert(response.status === 400, "статус: " + response.status);
     });
 %}
 
@@ -328,8 +296,8 @@ Authorization: Bearer {{token}}
     });
 %}
 
-### 20a. Ссылка на удалённый файл больше не работает → 404
-GET {{share_url}}
+### 20a. Публичная ссылка на удалённый файл больше не работает → 404
+GET {{host}}/s/{{file_id}}
 
 > {%
     client.test("ссылка на удалённый файл не работает", function () {

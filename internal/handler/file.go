@@ -115,6 +115,27 @@ func (h *Handler) downloadFile(w http.ResponseWriter, r *http.Request) {
 	h.writeFile(w, f, body)
 }
 
+// downloadPublic — GET /s/{id} — публичная ссылка на скачивание.
+// Авторизации нет: скачать может любой, кто знает id файла.
+func (h *Handler) downloadPublic(w http.ResponseWriter, r *http.Request) {
+	id, ok := fileIDFromPath(w, r)
+	if !ok {
+		return
+	}
+
+	f, body, err := h.files.DownloadPublic(r.Context(), id)
+	if errors.Is(err, service.ErrFileNotFound) {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	if err != nil {
+		h.internalError(w, err)
+		return
+	}
+
+	h.writeFile(w, f, body)
+}
+
 // writeFile отдаёт файл клиенту: заголовки + байты из потока body.
 // Используется и для обычного скачивания, и для скачивания по ссылке.
 func (h *Handler) writeFile(w http.ResponseWriter, f *model.File, body io.ReadCloser) {

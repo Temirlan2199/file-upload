@@ -31,17 +31,16 @@ func (r *FileRepository) Create(ctx context.Context, f *model.File) error {
 		Scan(&f.CreatedAt)
 }
 
-// GetByID ищет файл по id, но только среди файлов владельца.
-// Условие owner_id = $2 в SQL — это и есть проверка доступа:
-// чужой файл просто «не найдётся».
-func (r *FileRepository) GetByID(ctx context.Context, id, ownerID uuid.UUID) (*model.File, error) {
+// GetByID ищет файл по id. Владельца здесь не проверяем —
+// это делает сервис (для публичных ссылок проверка не нужна).
+func (r *FileRepository) GetByID(ctx context.Context, id uuid.UUID) (*model.File, error) {
 	query := `
 		SELECT id, owner_id, name, size, content_type, created_at
 		FROM files
-		WHERE id = $1 AND owner_id = $2`
+		WHERE id = $1`
 
 	var f model.File
-	err := r.db.QueryRow(ctx, query, id, ownerID).
+	err := r.db.QueryRow(ctx, query, id).
 		Scan(&f.ID, &f.OwnerID, &f.Name, &f.Size, &f.ContentType, &f.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound

@@ -2,27 +2,21 @@ package service
 
 import (
 	"context"
-	"crypto/rand"
 	"errors"
 	"io"
-	"time"
 
 	"github.com/google/uuid"
 
-	"github.com/Temirlan2199/file-upload/internal/cache"
 	"github.com/Temirlan2199/file-upload/internal/model"
 	"github.com/Temirlan2199/file-upload/internal/repository"
 )
 
-var (
-	ErrFileNotFound  = errors.New("file not found")
-	ErrShareNotFound = errors.New("share link not found or expired")
-)
+var ErrFileNotFound = errors.New("file not found")
 
 // FileRepository — метаданные файлов в Postgres.
 type FileRepository interface {
 	Create(ctx context.Context, f *model.File) error
-	GetByID(ctx context.Context, id, ownerID uuid.UUID) (*model.File, error)
+	GetByID(ctx context.Context, id uuid.UUID) (*model.File, error)
 	ListByOwner(ctx context.Context, ownerID uuid.UUID, limit, offset int) ([]model.File, error)
 	Delete(ctx context.Context, id, ownerID uuid.UUID) error
 }
@@ -41,21 +35,14 @@ type FileCache interface {
 	Delete(ctx context.Context, id uuid.UUID) error
 }
 
-// ShareStore — ссылки «поделиться» (Redis).
-type ShareStore interface {
-	Save(ctx context.Context, token string, link model.ShareLink, ttl time.Duration) error
-	Get(ctx context.Context, token string) (*model.ShareLink, error)
-}
-
 type FileService struct {
 	files   FileRepository
 	storage FileStorage
 	cache   FileCache
-	shares  ShareStore
 }
 
-func NewFileService(files FileRepository, storage FileStorage, cache FileCache, shares ShareStore) *FileService {
-	return &FileService{files: files, storage: storage, cache: cache, shares: shares}
+func NewFileService(files FileRepository, storage FileStorage, cache FileCache) *FileService {
+	return &FileService{files: files, storage: storage, cache: cache}
 }
 
 // Upload сохраняет файл: байты — в MinIO, метаданные — в Postgres.
@@ -84,27 +71,21 @@ func (s *FileService) Upload(ctx context.Context, ownerID uuid.UUID, name, conte
 	return f, nil
 }
 
-// Get возвращает метаданные файла владельца.
+// findFile находит файл по id — любого владельца.
 //
 // Паттерн cache-aside («кэш сбоку»):
 //  1. ищем в кэше (Redis) — если нашли, в базу не ходим;
 //  2. не нашли — берём из базы (Postgres);
 //  3. кладём результат в кэш, чтобы следующий запрос был быстрым.
-func (s *FileService) Get(ctx context.Context, ownerID, id uuid.UUID) (*model.File, error) {
+func (s *FileService) findFile(ctx context.Context, id uuid.UUID) (*model.File, error) {
 	// 1. Кэш. Любая ошибка (нет ключа или Redis недоступен) — не страшно,
 	// просто идём в базу: кэш только ускоряет, без него всё работает.
 	if f, err := s.cache.Get(ctx, id); err == nil {
-		// В кэше ключ — только id файла, без владельца. Поэтому проверку
-		// «файл принадлежит пользователю» делаем здесь, иначе через кэш
-		// можно было бы получить чужой файл.
-		if f.OwnerID != ownerID {
-			return nil, ErrFileNotFound
-		}
 		return f, nil
 	}
 
 	// 2. База.
-	f, err := s.files.GetByID(ctx, id, ownerID)
+	f, err := s.files.GetByID(ctx, id)
 	if errors.Is(err, repository.ErrNotFound) {
 		return nil, ErrFileNotFound
 	}
@@ -117,14 +98,45 @@ func (s *FileService) Get(ctx context.Context, ownerID, id uuid.UUID) (*model.Fi
 	return f, nil
 }
 
+// Get возвращает метаданные файла, только если он принадлежит ownerID.
+func (s *FileService) Get(ctx context.Context, ownerID, id uuid.UUID) (*model.File, error) {
+	f, err := s.findFile(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	// Проверка доступа: чужой файл — для пользователя «не найден»
+	// (404, а не 403 — чтобы не раскрывать, что такой файл вообще существует).
+	if f.OwnerID != ownerID {
+		return nil, ErrFileNotFound
+	}
+	return f, nil
+}
+
 func (s *FileService) List(ctx context.Context, ownerID uuid.UUID, limit, offset int) ([]model.File, error) {
 	return s.files.ListByOwner(ctx, ownerID, limit, offset)
 }
 
-// Download возвращает метаданные (нужны для заголовков ответа) и поток с байтами.
+// Download — скачивание своего файла. Возвращает метаданные (нужны для
+// заголовков ответа) и поток с байтами.
 func (s *FileService) Download(ctx context.Context, ownerID, id uuid.UUID) (*model.File, io.ReadCloser, error) {
 	// Сначала проверяем, что файл существует и принадлежит пользователю.
 	f, err := s.Get(ctx, ownerID, id)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	body, err := s.storage.Download(ctx, f.ID.String())
+	if err != nil {
+		return nil, nil, err
+	}
+	return f, body, nil
+}
+
+// DownloadPublic — скачивание по публичной ссылке /s/{id}, без проверки владельца.
+// Любой, кто знает id файла, может его скачать.
+func (s *FileService) DownloadPublic(ctx context.Context, id uuid.UUID) (*model.File, io.ReadCloser, error) {
+	f, err := s.findFile(ctx, id)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -153,38 +165,4 @@ func (s *FileService) Delete(ctx context.Context, ownerID, id uuid.UUID) error {
 	_ = s.cache.Delete(ctx, id)
 
 	return s.storage.Delete(ctx, id.String())
-}
-
-// Share создаёт публичную ссылку на файл, которая работает ttl времени.
-// Возвращает токен ссылки и момент, когда она истечёт.
-func (s *FileService) Share(ctx context.Context, ownerID, id uuid.UUID, ttl time.Duration) (string, time.Time, error) {
-	// Делиться можно только своим существующим файлом.
-	if _, err := s.Get(ctx, ownerID, id); err != nil {
-		return "", time.Time{}, err
-	}
-
-	// rand.Text() — 26 случайных символов (128 бит) из криптостойкого
-	// генератора. Угадать такой токен перебором невозможно.
-	token := rand.Text()
-
-	link := model.ShareLink{FileID: id, OwnerID: ownerID}
-	if err := s.shares.Save(ctx, token, link, ttl); err != nil {
-		return "", time.Time{}, err
-	}
-	return token, time.Now().Add(ttl), nil
-}
-
-// DownloadShared — скачивание по публичной ссылке, без авторизации.
-func (s *FileService) DownloadShared(ctx context.Context, token string) (*model.File, io.ReadCloser, error) {
-	link, err := s.shares.Get(ctx, token)
-	if errors.Is(err, cache.ErrNotFound) {
-		return nil, nil, ErrShareNotFound
-	}
-	if err != nil {
-		return nil, nil, err
-	}
-
-	// Дальше — обычное скачивание от имени владельца.
-	// Если файл уже удалили, Download вернёт ErrFileNotFound.
-	return s.Download(ctx, link.OwnerID, link.FileID)
 }
