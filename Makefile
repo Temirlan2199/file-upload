@@ -6,13 +6,18 @@ export
 # -tags 'postgres' включает поддержку Postgres (без него утилита не знает про эту базу).
 MIGRATE := go run -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@v4.20.1
 
-.PHONY: run build test infra-up infra-down migrate-up migrate-down migrate-version migrate-create
+.PHONY: run worker build test infra-up infra-down migrate-up migrate-down migrate-version migrate-create
 
 run:
 	go run ./cmd/api
 
+# Воркер Kafka — запускать в отдельном терминале параллельно с make run
+worker:
+	go run ./cmd/worker
+
 build:
 	go build -o bin/api ./cmd/api
+	go build -o bin/worker ./cmd/worker
 
 test:
 	go test ./...

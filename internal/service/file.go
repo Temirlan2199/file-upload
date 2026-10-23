@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 
 	"github.com/google/uuid"
 
@@ -35,14 +36,22 @@ type FileCache interface {
 	Delete(ctx context.Context, id uuid.UUID) error
 }
 
+// EventPublisher — отправка событий о файлах (Kafka).
+type EventPublisher interface {
+	PublishFileUploaded(ctx context.Context, fileID uuid.UUID) error
+	PublishFileDeleted(ctx context.Context, fileID uuid.UUID) error
+}
+
 type FileService struct {
 	files   FileRepository
 	storage FileStorage
 	cache   FileCache
+	events  EventPublisher
+	log     *slog.Logger
 }
 
-func NewFileService(files FileRepository, storage FileStorage, cache FileCache) *FileService {
-	return &FileService{files: files, storage: storage, cache: cache}
+func NewFileService(files FileRepository, storage FileStorage, cache FileCache, events EventPublisher, log *slog.Logger) *FileService {
+	return &FileService{files: files, storage: storage, cache: cache, events: events, log: log}
 }
 
 // Upload сохраняет файл: байты — в MinIO, метаданные — в Postgres.
@@ -53,6 +62,7 @@ func (s *FileService) Upload(ctx context.Context, ownerID uuid.UUID, name, conte
 		Name:        name,
 		Size:        size,
 		ContentType: contentType,
+		Status:      model.FileStatusPending, // ready станет после обработки воркером
 	}
 
 	// 1. Сначала загружаем байты в MinIO.
@@ -66,6 +76,16 @@ func (s *FileService) Upload(ctx context.Context, ownerID uuid.UUID, name, conte
 	if err := s.files.Create(ctx, f); err != nil {
 		_ = s.storage.Delete(ctx, f.ID.String())
 		return nil, err
+	}
+
+	// 3. Сообщаем в Kafka: «файл загружен». Обработает его воркер — позже,
+	// в фоне. Пользователь не ждёт обработки и сразу получает ответ.
+	// Если Kafka недоступна, файл всё равно сохранён — просто останется
+	// в статусе pending (надёжно решается паттерном Transactional Outbox).
+	// Ошибку не возвращаем клиенту, но обязательно пишем в лог —
+	// иначе потерю события никто не заметит.
+	if err := s.events.PublishFileUploaded(ctx, f.ID); err != nil {
+		s.log.Error("publish file.uploaded", "file_id", f.ID, "error", err)
 	}
 
 	return f, nil
@@ -148,9 +168,7 @@ func (s *FileService) DownloadPublic(ctx context.Context, id uuid.UUID) (*model.
 	return f, body, nil
 }
 
-// Delete удаляет файл: сначала запись в базе, потом кэш и объект в MinIO.
-// Порядок важен: если упадёт удаление из MinIO, останется лишний объект
-// (его не видно пользователю), а не запись, указывающая на пустоту.
+// Delete удаляет файл: запись в базе и кэш — сразу, объект в MinIO — через воркер.
 func (s *FileService) Delete(ctx context.Context, ownerID, id uuid.UUID) error {
 	err := s.files.Delete(ctx, id, ownerID)
 	if errors.Is(err, repository.ErrNotFound) {
@@ -164,5 +182,13 @@ func (s *FileService) Delete(ctx context.Context, ownerID, id uuid.UUID) error {
 	// несколько минут «находил» бы уже удалённый файл.
 	_ = s.cache.Delete(ctx, id)
 
-	return s.storage.Delete(ctx, id.String())
+	// Объект в MinIO удалит воркер по событию «файл удалён».
+	// Для пользователя файл исчезает сразу (записи в базе уже нет),
+	// а тяжёлая работа с хранилищем идёт в фоне.
+	if err := s.events.PublishFileDeleted(ctx, id); err != nil {
+		// Kafka недоступна — удаляем объект сами, сразу.
+		s.log.Error("publish file.deleted, deleting object directly", "file_id", id, "error", err)
+		return s.storage.Delete(ctx, id.String())
+	}
+	return nil
 }

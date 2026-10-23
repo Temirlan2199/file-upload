@@ -11,7 +11,15 @@ cp .env.example .env   # локальные настройки
 make infra-up          # поднять Postgres, Redis, Kafka, MinIO
 make migrate-up        # применить миграции БД
 make run               # запустить API на :8000
+make worker            # в другом терминале: воркер Kafka
 curl localhost:8000/health
+```
+
+## Как устроена обработка файлов
+
+```
+POST /files ─► MinIO + Postgres (status=pending) ─► Kafka: file.uploaded ─► worker: SHA-256 → status=ready
+DELETE /files/{id} ─► Postgres ─► Kafka: file.deleted ─► worker: удаляет объект из MinIO
 ```
 
 ## API

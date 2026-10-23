@@ -11,6 +11,8 @@ type FileResponse struct {
 	Name        string    `json:"name"`
 	Size        int64     `json:"size"`
 	ContentType string    `json:"content_type"`
+	Status      string    `json:"status"`             // pending | ready | failed
+	Checksum    string    `json:"checksum,omitempty"` // omitempty — не выводить, пока пустой
 	CreatedAt   time.Time `json:"created_at"`
 }
 
@@ -20,6 +22,8 @@ func NewFileResponse(f *model.File) FileResponse {
 		Name:        f.Name,
 		Size:        f.Size,
 		ContentType: f.ContentType,
+		Status:      string(f.Status),
+		Checksum:    f.Checksum,
 		CreatedAt:   f.CreatedAt,
 	}
 }

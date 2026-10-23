@@ -5,6 +5,7 @@
 #    1. docker compose ps        — контейнеры healthy
 #    2. make migrate-up          — миграции применены
 #    3. make run                 — сервер запущен (ровно один!)
+#    4. make worker              — воркер Kafka запущен (в отдельном терминале)
 #
 #  Как пользоваться:
 #    - Нажимай зелёную ▶ слева от запроса, СТРОГО ПО ПОРЯДКУ сверху вниз:
@@ -97,6 +98,8 @@ Content-Type: text/markdown
         client.assert(response.status === 201, "статус: " + response.status);
         client.assert(response.body.name === "README.md", "имя: " + response.body.name);
         client.assert(response.body.size > 0, "размер: " + response.body.size);
+        // Сразу после загрузки файл ещё не обработан воркером.
+        client.assert(response.body.status === "pending", "статус: " + response.body.status);
     });
     // Запоминаем id для следующих запросов.
     client.global.set("file_id", response.body.id);
@@ -141,6 +144,19 @@ Authorization: Bearer {{token}}
     client.test("метаданные получены", function () {
         client.assert(response.status === 200, "статус: " + response.status);
         client.assert(response.body.id === client.global.get("file_id"), "id не совпал");
+    });
+%}
+
+### 8a. Статус после обработки воркером → ready + checksum
+# Воркер получает событие из Kafka и считает SHA-256 файла — обычно за доли секунды.
+# Если статус всё ещё pending — проверь, запущен ли make worker.
+GET {{host}}/api/v1/files/{{file_id}}
+Authorization: Bearer {{token}}
+
+> {%
+    client.test("воркер обработал файл", function () {
+        client.assert(response.body.status === "ready", "статус: " + response.body.status + " (запущен ли make worker?)");
+        client.assert(response.body.checksum && response.body.checksum.length === 64, "checksum: " + response.body.checksum);
     });
 %}
 
