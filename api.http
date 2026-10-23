@@ -1,31 +1,38 @@
-# HTTP-запросы для ручной проверки API.
-# Открой файл в GoLand и нажми зелёную ▶ слева от запроса.
-# Запросы разделяются строкой, начинающейся с ###.
-# Перед запуском: make infra-up && make migrate-up && make run
+# =====================================================================
+#  Ручная проверка API в GoLand (HTTP Client)
+# =====================================================================
+#  Перед запуском:
+#    1. docker compose ps        — контейнеры healthy
+#    2. make migrate-up          — миграции применены
+#    3. make run                 — сервер запущен (ровно один!)
+#
+#  Как пользоваться:
+#    - Нажимай зелёную ▶ слева от запроса, СТРОГО ПО ПОРЯДКУ сверху вниз:
+#      следующие запросы используют token и file_id из предыдущих.
+#    - Или кнопка «Run All Requests in File» вверху файла — выполнит всё подряд.
+#    - Блок > {% ... %} после запроса — JS-скрипт, который выполняется после ответа:
+#        client.global.set(...)  — сохраняет значение в переменную ({{имя}})
+#        client.test(...)        — проверка; результат видно на вкладке Tests
+# =====================================================================
 
-### Health — сервер жив
-GET http://localhost:8000/health
+# Переменная на весь файл — адрес сервера.
+@host = http://localhost:8000
 
-### Регистрация
-POST http://localhost:8000/api/v1/auth/register
-Content-Type: application/json
 
-{
-  "email": "me@mail.com",
-  "password": "supersecret"
-}
+### 1. Health — сервер жив
+GET {{host}}/health
 
-### Регистрация с невалидными данными → 400
-POST http://localhost:8000/api/v1/auth/register
-Content-Type: application/json
+> {%
+    client.test("сервер отвечает 200", function () {
+        client.assert(response.status === 200, "статус: " + response.status);
+    });
+%}
 
-{
-  "email": "not-an-email",
-  "password": "123"
-}
 
-### Логин — токен из ответа сохраняется в переменную token
-POST http://localhost:8000/api/v1/auth/login
+# ============================ Авторизация ============================
+
+### 2. Регистрация первого пользователя (повторный запуск даст 409 — это нормально)
+POST {{host}}/api/v1/auth/register
 Content-Type: application/json
 
 {
@@ -34,32 +41,47 @@ Content-Type: application/json
 }
 
 > {%
-    // Этот JS-скрипт выполняется после ответа:
-    // берём поле token из JSON и сохраняем в глобальную переменную.
-    client.global.set("token", response.body.token);
+    client.test("пользователь создан или уже есть", function () {
+        client.assert(response.status === 201 || response.status === 409, "статус: " + response.status);
+    });
 %}
 
-### Логин с неверным паролем → 401
-POST http://localhost:8000/api/v1/auth/login
+### 3. Логин — сохраняем токен в переменную token
+POST {{host}}/api/v1/auth/login
 Content-Type: application/json
 
 {
   "email": "me@mail.com",
-  "password": "wrong-password"
+  "password": "supersecret"
 }
 
-### Текущий пользователь (сначала выполни «Логин»)
-GET http://localhost:8000/api/v1/users/me
+> {%
+    client.test("логин успешен, токен получен", function () {
+        client.assert(response.status === 200, "статус: " + response.status);
+        client.assert(response.body.token, "в ответе нет token");
+    });
+    client.global.set("token", response.body.token);
+%}
+
+### 4. Текущий пользователь (с токеном)
+GET {{host}}/api/v1/users/me
 Authorization: Bearer {{token}}
 
-### Текущий пользователь без токена → 401
-GET http://localhost:8000/api/v1/users/me
+> {%
+    client.test("вернулся мой пользователь", function () {
+        client.assert(response.status === 200, "статус: " + response.status);
+        client.assert(response.body.email === "me@mail.com", "email: " + response.body.email);
+    });
+%}
 
-# ======================= Файлы =======================
-# Все запросы ниже требуют токен — сначала выполни «Логин».
 
-### Загрузка файла (multipart/form-data, поле "file")
-POST http://localhost:8000/api/v1/files
+# ======================= Загрузка и скачивание =======================
+
+### 5. Загрузка файла с диска (README.md из проекта)
+# multipart/form-data — так браузеры отправляют файлы.
+# boundary — строка-разделитель между частями формы.
+# "< ./README.md" — подставить содержимое файла (путь относительно этого .http-файла).
+POST {{host}}/api/v1/files
 Authorization: Bearer {{token}}
 Content-Type: multipart/form-data; boundary=boundary
 
@@ -71,22 +93,201 @@ Content-Type: text/markdown
 --boundary--
 
 > {%
-    // Сохраняем id загруженного файла для следующих запросов.
+    client.test("файл загружен", function () {
+        client.assert(response.status === 201, "статус: " + response.status);
+        client.assert(response.body.name === "README.md", "имя: " + response.body.name);
+        client.assert(response.body.size > 0, "размер: " + response.body.size);
+    });
+    // Запоминаем id для следующих запросов.
     client.global.set("file_id", response.body.id);
 %}
 
-### Список моих файлов (постранично)
-GET http://localhost:8000/api/v1/files?limit=20&offset=0
+### 6. Загрузка файла с кириллицей в имени (содержимое прямо здесь, без файла на диске)
+POST {{host}}/api/v1/files
+Authorization: Bearer {{token}}
+Content-Type: multipart/form-data; boundary=boundary
+
+--boundary
+Content-Disposition: form-data; name="file"; filename="отчёт.txt"
+Content-Type: text/plain
+
+Привет! Это тестовый файл с кириллицей.
+--boundary--
+
+> {%
+    client.test("файл с кириллицей загружен", function () {
+        client.assert(response.status === 201, "статус: " + response.status);
+        client.assert(response.body.name === "отчёт.txt", "имя: " + response.body.name);
+    });
+    client.global.set("file_id_ru", response.body.id);
+%}
+
+### 7. Список моих файлов (новые сверху)
+GET {{host}}/api/v1/files?limit=20&offset=0
 Authorization: Bearer {{token}}
 
-### Метаданные файла
-GET http://localhost:8000/api/v1/files/{{file_id}}
+> {%
+    client.test("в списке есть загруженные файлы", function () {
+        client.assert(response.status === 200, "статус: " + response.status);
+        client.assert(response.body.length >= 2, "файлов: " + response.body.length);
+    });
+%}
+
+### 8. Метаданные файла
+GET {{host}}/api/v1/files/{{file_id}}
 Authorization: Bearer {{token}}
 
-### Скачать файл
-GET http://localhost:8000/api/v1/files/{{file_id}}/download
+> {%
+    client.test("метаданные получены", function () {
+        client.assert(response.status === 200, "статус: " + response.status);
+        client.assert(response.body.id === client.global.get("file_id"), "id не совпал");
+    });
+%}
+
+### 9. Скачать README.md
+# >>! — сохранить тело ответа в файл (перезаписать, если уже есть).
+# После выполнения открой /tmp/downloaded-README.md и сравни с README.md.
+GET {{host}}/api/v1/files/{{file_id}}/download
 Authorization: Bearer {{token}}
 
-### Удалить файл → 204
-DELETE http://localhost:8000/api/v1/files/{{file_id}}
+> {%
+    client.test("файл скачан с правильными заголовками", function () {
+        client.assert(response.status === 200, "статус: " + response.status);
+        client.assert(response.headers.valueOf("Content-Disposition").indexOf("README.md") !== -1,
+            "Content-Disposition: " + response.headers.valueOf("Content-Disposition"));
+        client.assert(response.body.indexOf("file-upload") !== -1, "содержимое не похоже на README");
+    });
+%}
+
+>>! /tmp/downloaded-README.md
+
+### 10. Скачать файл с кириллицей — смотри заголовок Content-Disposition в ответе
+GET {{host}}/api/v1/files/{{file_id_ru}}/download
 Authorization: Bearer {{token}}
+
+> {%
+    client.test("содержимое совпадает", function () {
+        client.assert(response.status === 200, "статус: " + response.status);
+        client.assert(response.body.indexOf("Привет!") !== -1, "тело: " + response.body);
+    });
+%}
+
+
+# ============================ Ошибки ================================
+
+### 11. Загрузка без файла → 400
+POST {{host}}/api/v1/files
+Authorization: Bearer {{token}}
+
+> {%
+    client.test("400 без файла", function () {
+        client.assert(response.status === 400, "статус: " + response.status);
+    });
+%}
+
+### 12. Скачивание без токена → 401
+GET {{host}}/api/v1/files/{{file_id}}/download
+
+> {%
+    client.test("401 без токена", function () {
+        client.assert(response.status === 401, "статус: " + response.status);
+    });
+%}
+
+### 13. Невалидный id в пути → 400
+GET {{host}}/api/v1/files/not-a-uuid
+Authorization: Bearer {{token}}
+
+> {%
+    client.test("400 на кривой id", function () {
+        client.assert(response.status === 400, "статус: " + response.status);
+    });
+%}
+
+### 14. Несуществующий файл → 404
+GET {{host}}/api/v1/files/00000000-0000-0000-0000-000000000000
+Authorization: Bearer {{token}}
+
+> {%
+    client.test("404 на несуществующий файл", function () {
+        client.assert(response.status === 404, "статус: " + response.status);
+    });
+%}
+
+
+# ===================== Чужие файлы недоступны ========================
+
+### 15. Регистрация второго пользователя
+POST {{host}}/api/v1/auth/register
+Content-Type: application/json
+
+{
+  "email": "other@mail.com",
+  "password": "supersecret"
+}
+
+### 16. Логин второго пользователя → token2
+POST {{host}}/api/v1/auth/login
+Content-Type: application/json
+
+{
+  "email": "other@mail.com",
+  "password": "supersecret"
+}
+
+> {%
+    client.global.set("token2", response.body.token);
+%}
+
+### 17. Второй пользователь пытается скачать файл первого → 404
+GET {{host}}/api/v1/files/{{file_id}}/download
+Authorization: Bearer {{token2}}
+
+> {%
+    client.test("чужой файл не виден", function () {
+        client.assert(response.status === 404, "статус: " + response.status);
+    });
+%}
+
+### 18. Второй пользователь пытается удалить файл первого → 404
+DELETE {{host}}/api/v1/files/{{file_id}}
+Authorization: Bearer {{token2}}
+
+> {%
+    client.test("чужой файл не удалить", function () {
+        client.assert(response.status === 404, "статус: " + response.status);
+    });
+%}
+
+
+# ============================ Удаление ===============================
+
+### 19. Удалить README.md → 204
+DELETE {{host}}/api/v1/files/{{file_id}}
+Authorization: Bearer {{token}}
+
+> {%
+    client.test("файл удалён", function () {
+        client.assert(response.status === 204, "статус: " + response.status);
+    });
+%}
+
+### 20. Скачать удалённый файл → 404
+GET {{host}}/api/v1/files/{{file_id}}/download
+Authorization: Bearer {{token}}
+
+> {%
+    client.test("удалённый файл больше не скачать", function () {
+        client.assert(response.status === 404, "статус: " + response.status);
+    });
+%}
+
+### 21. Удалить файл с кириллицей → 204
+DELETE {{host}}/api/v1/files/{{file_id_ru}}
+Authorization: Bearer {{token}}
+
+> {%
+    client.test("файл удалён", function () {
+        client.assert(response.status === 204, "статус: " + response.status);
+    });
+%}
