@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Temirlan2199/file-upload/internal/cache"
 	"github.com/Temirlan2199/file-upload/internal/config"
 	"github.com/Temirlan2199/file-upload/internal/handler"
 	"github.com/Temirlan2199/file-upload/internal/logger"
@@ -46,14 +47,25 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Собираем слои снизу вверх: repository/storage → service → handler.
+	rdb, err := cache.NewRedisClient(ctx, cfg.RedisAddr)
+	if err != nil {
+		log.Error("connect to redis", "error", err)
+		os.Exit(1)
+	}
+	defer rdb.Close()
+
+	// Собираем слои снизу вверх: repository/storage/cache → service → handler.
 	userRepo := repository.NewUserRepository(db)
 	fileRepo := repository.NewFileRepository(db)
 
-	authService := service.NewAuthService(userRepo, cfg.JWTSecret, cfg.JWTTTL)
-	fileService := service.NewFileService(fileRepo, fileStorage)
+	fileCache := cache.NewFileCache(rdb, 10*time.Minute)  // метаданные живут в кэше 10 минут
+	shareStore := cache.NewShareStore(rdb)                // ссылки «поделиться»
+	limiter := cache.NewRateLimiter(rdb, 10, time.Minute) // не больше 10 запросов в минуту
 
-	h := handler.New(log, authService, fileService)
+	authService := service.NewAuthService(userRepo, cfg.JWTSecret, cfg.JWTTTL)
+	fileService := service.NewFileService(fileRepo, fileStorage, fileCache, shareStore)
+
+	h := handler.New(log, authService, fileService, limiter, cfg.PublicURL)
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.HTTPPort,

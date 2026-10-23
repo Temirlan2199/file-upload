@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/Temirlan2199/file-upload/internal/dto"
+	"github.com/Temirlan2199/file-upload/internal/model"
 	"github.com/Temirlan2199/file-upload/internal/service"
 )
 
@@ -110,6 +111,13 @@ func (h *Handler) downloadFile(w http.ResponseWriter, r *http.Request) {
 		h.internalError(w, err)
 		return
 	}
+
+	h.writeFile(w, f, body)
+}
+
+// writeFile отдаёт файл клиенту: заголовки + байты из потока body.
+// Используется и для обычного скачивания, и для скачивания по ссылке.
+func (h *Handler) writeFile(w http.ResponseWriter, f *model.File, body io.ReadCloser) {
 	defer body.Close() // закрываем поток из MinIO после отправки
 
 	// Заголовки нужно выставить ДО записи тела.

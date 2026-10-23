@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -41,6 +42,35 @@ func (h *Handler) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 
 		ctx := context.WithValue(r.Context(), userIDKey, userID)
 		next(w, r.WithContext(ctx))
+	}
+}
+
+// rateLimit пропускает не больше N запросов в минуту с одного IP-адреса
+// (лимит задаёт RateLimiter). Остальным отвечает 429 Too Many Requests.
+// Вешаем на логин и регистрацию — это защита от перебора паролей.
+func (h *Handler) rateLimit(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// RemoteAddr имеет вид "IP:порт" — порт у каждого соединения свой, отрезаем его.
+		ip, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil {
+			ip = r.RemoteAddr
+		}
+
+		// Ключ включает путь: лимиты на логин и регистрацию считаются отдельно.
+		allowed, err := h.limiter.Allow(r.Context(), ip+":"+r.URL.Path)
+		if err != nil {
+			// Redis недоступен — не блокируем пользователей, а пропускаем запрос
+			// (fail open) и пишем в лог. Иначе падение Redis сломало бы логин.
+			h.log.Error("rate limiter", "error", err)
+			next(w, r)
+			return
+		}
+		if !allowed {
+			writeError(w, http.StatusTooManyRequests, "too many requests, try again later")
+			return
+		}
+
+		next(w, r)
 	}
 }
 

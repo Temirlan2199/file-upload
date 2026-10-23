@@ -173,6 +173,62 @@ Authorization: Bearer {{token}}
 %}
 
 
+# ===================== Ссылки «поделиться» (Redis) ====================
+
+### 10a. Создать публичную ссылку на README.md на 60 минут
+POST {{host}}/api/v1/files/{{file_id}}/share
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "ttl_minutes": 60
+}
+
+> {%
+    client.test("ссылка создана", function () {
+        client.assert(response.status === 201, "статус: " + response.status);
+        client.assert(response.body.url.indexOf("/s/") !== -1, "url: " + response.body.url);
+    });
+    // Сохраняем полный адрес ссылки.
+    client.global.set("share_url", response.body.url);
+%}
+
+### 10b. Скачать по ссылке БЕЗ токена (так её откроет любой, кому её отправили)
+# Эту ссылку можно открыть и прямо в браузере.
+GET {{share_url}}
+
+> {%
+    client.test("файл скачан по ссылке без авторизации", function () {
+        client.assert(response.status === 200, "статус: " + response.status);
+        client.assert(response.body.indexOf("file-upload") !== -1, "содержимое не похоже на README");
+    });
+%}
+
+### 10c. Несуществующая ссылка → 404
+GET {{host}}/s/NOSUCHTOKEN
+
+> {%
+    client.test("404 на несуществующую ссылку", function () {
+        client.assert(response.status === 404, "статус: " + response.status);
+    });
+%}
+
+### 10d. Неверный срок жизни ссылки → 400
+POST {{host}}/api/v1/files/{{file_id}}/share
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "ttl_minutes": 0
+}
+
+> {%
+    client.test("400 на ttl_minutes = 0", function () {
+        client.assert(response.status === 400, "статус: " + response.status);
+    });
+%}
+
+
 # ============================ Ошибки ================================
 
 ### 11. Загрузка без файла → 400
@@ -272,6 +328,15 @@ Authorization: Bearer {{token}}
     });
 %}
 
+### 20a. Ссылка на удалённый файл больше не работает → 404
+GET {{share_url}}
+
+> {%
+    client.test("ссылка на удалённый файл не работает", function () {
+        client.assert(response.status === 404, "статус: " + response.status);
+    });
+%}
+
 ### 20. Скачать удалённый файл → 404
 GET {{host}}/api/v1/files/{{file_id}}/download
 Authorization: Bearer {{token}}
@@ -291,3 +356,19 @@ Authorization: Bearer {{token}}
         client.assert(response.status === 204, "статус: " + response.status);
     });
 %}
+
+
+# ============================ Rate limit ============================
+# Логин и регистрация: не больше 10 запросов в минуту с одного IP.
+# Чтобы увидеть 429: нажми ▶ у запроса ниже 11 раз подряд (быстрее минуты).
+# Через минуту счётчик в Redis истечёт и запросы снова пройдут.
+# Внимание: запросы 2, 3, 15, 16 из этого файла тоже считаются в лимит.
+
+### 22. Логин с неверным паролем — повторяй до 429 Too Many Requests
+POST {{host}}/api/v1/auth/login
+Content-Type: application/json
+
+{
+  "email": "me@mail.com",
+  "password": "wrong-password"
+}

@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -30,16 +31,25 @@ type FileService interface {
 	List(ctx context.Context, ownerID uuid.UUID, limit, offset int) ([]model.File, error)
 	Download(ctx context.Context, ownerID, id uuid.UUID) (*model.File, io.ReadCloser, error)
 	Delete(ctx context.Context, ownerID, id uuid.UUID) error
+	Share(ctx context.Context, ownerID, id uuid.UUID, ttl time.Duration) (string, time.Time, error)
+	DownloadShared(ctx context.Context, token string) (*model.File, io.ReadCloser, error)
+}
+
+// RateLimiter — ограничитель частоты запросов.
+type RateLimiter interface {
+	Allow(ctx context.Context, key string) (bool, error)
 }
 
 type Handler struct {
-	log   *slog.Logger
-	auth  AuthService
-	files FileService
+	log       *slog.Logger
+	auth      AuthService
+	files     FileService
+	limiter   RateLimiter
+	publicURL string // внешний адрес сервиса для ссылок «поделиться»
 }
 
-func New(log *slog.Logger, auth AuthService, files FileService) *Handler {
-	return &Handler{log: log, auth: auth, files: files}
+func New(log *slog.Logger, auth AuthService, files FileService, limiter RateLimiter, publicURL string) *Handler {
+	return &Handler{log: log, auth: auth, files: files, limiter: limiter, publicURL: publicURL}
 }
 
 // Routes регистрирует все маршруты.
@@ -48,8 +58,9 @@ func (h *Handler) Routes() http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /health", h.health)
-	mux.HandleFunc("POST /api/v1/auth/register", h.register)
-	mux.HandleFunc("POST /api/v1/auth/login", h.login)
+	// rateLimit — не больше N попыток в минуту с одного IP.
+	mux.HandleFunc("POST /api/v1/auth/register", h.rateLimit(h.register))
+	mux.HandleFunc("POST /api/v1/auth/login", h.rateLimit(h.login))
 
 	// requireAuth пропустит запрос дальше, только если токен валиден.
 	mux.HandleFunc("GET /api/v1/users/me", h.requireAuth(h.me))
@@ -60,6 +71,10 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/files/{id}", h.requireAuth(h.getFile))
 	mux.HandleFunc("GET /api/v1/files/{id}/download", h.requireAuth(h.downloadFile))
 	mux.HandleFunc("DELETE /api/v1/files/{id}", h.requireAuth(h.deleteFile))
+
+	// Ссылки «поделиться»: создать — с токеном, скачать — без (доступ даёт сама ссылка).
+	mux.HandleFunc("POST /api/v1/files/{id}/share", h.requireAuth(h.shareFile))
+	mux.HandleFunc("GET /s/{token}", h.downloadShared)
 
 	// logRequests оборачивает весь mux — логируется каждый запрос.
 	return h.logRequests(mux)
